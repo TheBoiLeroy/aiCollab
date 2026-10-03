@@ -19,7 +19,7 @@ All transitions on shared objects run in Postgres functions (`supabase/migration
 ### 1. Supabase
 
 1. Create a project at supabase.com.
-2. Run the migration: either `supabase link --project-ref <ref> && supabase db push`, or paste `supabase/migrations/20261003000000_init.sql` into the SQL editor and run it.
+2. Run the migrations: either `supabase link --project-ref <ref> && supabase db push`, or paste each file in `supabase/migrations/` (in order) into the SQL editor and run it.
 3. Auth > URL Configuration: set **Site URL** to your Vercel URL and add `https://<your-domain>/auth/confirm` (and `http://localhost:3000/auth/confirm` for local dev) to **Redirect URLs**.
 4. Copy the project URL and the publishable key from Project Settings > API.
 
