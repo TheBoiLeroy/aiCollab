@@ -50,7 +50,7 @@ export type Message = {
   created_at: string;
 };
 
-export type ProposalStatus = "open" | "accepted" | "rejected" | "needs_rebase";
+export type ProposalStatus = "open" | "accepted" | "rejected" | "needs_rebase" | "closed";
 
 export type Proposal = {
   id: string;

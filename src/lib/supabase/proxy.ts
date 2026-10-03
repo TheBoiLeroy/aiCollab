@@ -4,7 +4,12 @@ import { supabaseEnv } from "./env";
 
 const PUBLIC_PATHS = ["/login", "/auth"];
 
+// Bearer-token APIs and OAuth discovery: no cookie session, no login redirect.
+const TOKEN_PATHS = ["/api/mcp", "/.well-known/"];
+
 export async function updateSession(request: NextRequest) {
+  if (TOKEN_PATHS.some((p) => request.nextUrl.pathname.startsWith(p))) return NextResponse.next();
+
   let response = NextResponse.next({ request });
   const { url, key } = supabaseEnv();
 
@@ -29,7 +34,9 @@ export async function updateSession(request: NextRequest) {
   if (!user && !PUBLIC_PATHS.some((p) => path.startsWith(p))) {
     const login = request.nextUrl.clone();
     login.pathname = "/login";
-    login.searchParams.set("next", path);
+    // Keep the query string (e.g. the OAuth consent page's authorization_id).
+    login.search = "";
+    login.searchParams.set("next", path + request.nextUrl.search);
     return NextResponse.redirect(login);
   }
 

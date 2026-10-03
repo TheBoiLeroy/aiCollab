@@ -199,6 +199,16 @@ export function ChatView(props: {
               }
             }}
           />
+          <button
+            type="button"
+            className="btn self-end"
+            onClick={() => openShare(fork ? "propose" : "publish")}
+            disabled={streaming || !lastAssistant}
+            title={fork ? "Propose change" : "Publish as new artifact"}
+            aria-label={fork ? "Propose change" : "Publish as new artifact"}
+          >
+            <FossilIcon />
+          </button>
           <button className="btn-primary self-end" disabled={streaming || !draft.trim()}>
             {streaming ? "…" : "Send"}
           </button>
@@ -217,6 +227,15 @@ export function ChatView(props: {
       )}
     </div>
   );
+}
+
+/**
+ * The logo is white art centered on a square canvas, so it's used as a mask:
+ * it takes the button's text color in light and dark mode, cropped to the skull.
+ */
+function FossilIcon() {
+  const mask = "url(/fossilLogo.png) center / 100% auto no-repeat";
+  return <span aria-hidden className="block h-4 w-11 bg-current" style={{ mask, WebkitMask: mask }} />;
 }
 
 /** Minimal rendering: prose with fenced code blocks. */

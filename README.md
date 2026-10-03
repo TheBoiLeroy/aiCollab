@@ -26,7 +26,7 @@ All transitions on shared objects run in Postgres functions (`supabase/migration
 ### 2. Local dev
 
 ```bash
-cp .env.example .env.local   # fill in Supabase + at least one AI key
+cp .env.example .env.local   # fill in Supabase + PROVIDER_KEYS_SECRET (openssl rand -base64 32)
 npm install
 npm run dev
 ```
@@ -35,9 +35,42 @@ npm run dev
 
 Import the repo in Vercel (framework: Next.js, no build settings to change) and add the same environment variables as `.env.local`, with `NEXT_PUBLIC_SITE_URL` set to the production URL. Chat streaming and rebases use up to 300 seconds per request (`maxDuration`).
 
+## MCP App (use Intermediary from Claude, ChatGPT, VS Code…)
+
+`/api/mcp` is a remote MCP server (streamable HTTP, stateless) with an [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) UI. The connected AI acts as your private AI: it can read the team's artifacts, publish new ones, propose changes, and show an interactive review screen (diff + Approve/Reject) inline in the chat.
+
+| Tool | What it does | UI |
+|---|---|---|
+| `list_workspaces` | Workspaces you're in | |
+| `show_workspace` | Artifacts, open proposals, what's waiting on your vote | ✓ |
+| `get_artifact` | Current official version, full content | ✓ |
+| `review_proposal` | Summary, diff and votes | ✓ |
+| `cast_review` | Approve / reject (only when you say so) | ✓ |
+| `publish_artifact` | Share new work with the team | ✓ |
+| `propose_change` | Propose a new version of an artifact | ✓ |
+
+**Auth.** MCP clients sign in through Supabase Auth's OAuth 2.1 server, so they act as your existing account and every RLS rule still applies. The app serves the protected-resource metadata (`/.well-known/oauth-protected-resource/api/mcp`), verifies tokens against the project's JWKS, and hosts the consent screen at `/oauth/consent`. People can revoke connected apps under **AI keys**.
+
+**Setup**
+
+1. Supabase dashboard → Authentication → **OAuth Server**: enable it, set the authorization path to `/oauth/consent`, and enable **dynamic client registration** (MCP clients register themselves).
+2. Authentication → URL Configuration: the **Site URL** must be the app's public URL (the authorization path is resolved against it).
+3. The server must be reachable over public HTTPS (Claude connects from its own servers, not your machine): deploy to Vercel, or for local testing run a tunnel such as `cloudflared tunnel --url https://localhost:3001 --no-tls-verify` and use that URL as the Site URL.
+4. In Claude: Settings → Connectors → **Add custom connector** → `https://<your-host>/api/mcp`, then sign in and press Allow.
+
+## Bring your own AI keys
+
+Each person adds their own Anthropic, OpenAI or Gemini API key under **AI keys** (`/settings`), and their private threads, summaries and rebases run on (and bill to) their own account. Keys are checked with the provider before saving, encrypted with AES-256-GCM using `PROVIDER_KEYS_SECRET`, and stored in `user_provider_keys`, which only the owner can read. The app never shows a key again. The `*_API_KEY` env vars are optional shared fallbacks used only for a provider someone hasn't connected; leave them blank to require everyone to bring their own.
+
 ## Inviting teammates
 
-The workspace creator invites people by email on the Members page. Invitees sign up with that email and accept from their workspaces page. The app doesn't send invite emails itself in v1.
+The workspace creator copies the **invite link** from the Members page and sends it however they like. Anyone who opens it signs in (or creates an account) and lands on a one-click Join page, up to 5 members. "Reset link" invalidates the old one. Inviting by email still works too: invitees sign up with that email and accept from their workspaces page. The app doesn't send invite emails itself.
+
+The creator can also **remove** members from the Members page. That closes the removed person's in-flight proposals (shown as "Closed (author left)"), re-checks everyone else's open proposals (one fewer approval is now needed, so some may be accepted right away), deletes their private threads in that workspace, and resets the invite link.
+
+### Demo accounts
+
+`supabase/seed-demo.sql` creates four confirmed users (`demo1@example.com` … `demo4@example.com`, password `demo-pass-2026`) and adds them to a workspace. Set `owner_email` at the top and run it in the SQL editor. It's safe to re-run.
 
 ## Not in v1
 

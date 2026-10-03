@@ -11,7 +11,8 @@ import {
   SUMMARY_SYSTEM,
   summaryRequest,
 } from "@/lib/artifacts";
-import { availableModels, complete, resolveModel } from "@/lib/models";
+import { adapters, availableModels, complete, loadCredentials, resolveModel, type Provider } from "@/lib/models";
+import { encryptKey, keyHint, PROVIDERS } from "@/lib/models/keys";
 import { createClient, requireUser } from "@/lib/supabase/server";
 import type { Artifact, ArtifactVersion, Format, Message, Proposal, Thread } from "@/lib/types";
 import { FORMATS } from "@/lib/types";
@@ -34,22 +35,25 @@ export async function signIn(_: ActionResult, form: FormData): Promise<ActionRes
   });
   if (error) return { error: error.message };
   const next = str(form, "next");
-  redirect(next.startsWith("/") ? next : "/workspaces");
+  redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/workspaces");
 }
 
 export async function signUp(_: ActionResult, form: FormData): Promise<ActionResult> {
   const supabase = await createClient();
   const origin = (await headers()).get("origin") ?? process.env.NEXT_PUBLIC_SITE_URL ?? "";
+  // Carry an invite link (or other page) through sign-up and email confirmation.
+  const next = str(form, "next");
+  const safeNext = next.startsWith("/") && !next.startsWith("//") ? next : "";
   const { data, error } = await supabase.auth.signUp({
     email: str(form, "email"),
     password: String(form.get("password") ?? ""),
     options: {
-      emailRedirectTo: `${origin}/auth/confirm`,
+      emailRedirectTo: `${origin}/auth/confirm${safeNext ? `?next=${encodeURIComponent(safeNext)}` : ""}`,
       data: { display_name: str(form, "display_name") || undefined },
     },
   });
   if (error) return { error: error.message };
-  if (data.session) redirect("/workspaces");
+  if (data.session) redirect(safeNext || "/workspaces");
   return { ok: true, value: "Check your email to confirm your account, then sign in." };
 }
 
@@ -104,10 +108,34 @@ export async function inviteMember(_: ActionResult, form: FormData): Promise<Act
   return { ok: true, value: `Invited ${email}. They'll see the invite after signing up with that email.` };
 }
 
+export async function removeMember(workspaceId: string, userId: string): Promise<ActionResult> {
+  const { supabase } = await requireUser();
+  const { error } = await supabase.rpc("remove_member", { ws: workspaceId, target: userId });
+  if (error) return { error: error.message };
+  revalidatePath(`/w/${workspaceId}`, "layout");
+  return { ok: true };
+}
+
 export async function revokeInvite(inviteId: string, workspaceId: string) {
   const { supabase } = await requireUser();
   await supabase.from("workspace_invites").delete().eq("id", inviteId);
   revalidatePath(`/w/${workspaceId}/members`);
+}
+
+export async function rotateInviteLink(workspaceId: string) {
+  const { supabase } = await requireUser();
+  await supabase.rpc("workspace_invite_token", { ws: workspaceId, rotate: true });
+  revalidatePath(`/w/${workspaceId}/members`);
+}
+
+export async function joinWorkspace(token: string) {
+  const { supabase } = await requireUser();
+  const { data, error } = await supabase.rpc("join_workspace", { p_token: token });
+  if (error) {
+    const full = /at most 5 members/.test(error.message);
+    redirect(`/join/${token}?error=${full ? "full" : "invalid"}`);
+  }
+  redirect(`/w/${data}`);
 }
 
 export async function acceptInvite(inviteId: string) {
@@ -118,6 +146,64 @@ export async function acceptInvite(inviteId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Personal AI keys
+// ---------------------------------------------------------------------------
+
+export async function saveProviderKey(_: ActionResult, form: FormData): Promise<ActionResult> {
+  const { supabase, user } = await requireUser();
+  const provider = str(form, "provider") as Provider;
+  const apiKey = str(form, "api_key");
+  const workspaceId = str(form, "workspace_id") || undefined;
+  const meta = PROVIDERS.find((p) => p.id === provider);
+  if (!meta) return { error: "Unknown provider." };
+  if (!apiKey) return { error: "Paste an API key." };
+
+  try {
+    await adapters[provider].verify({ apiKey, workspaceId });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    return { error: `${meta.label} rejected that key: ${message}` };
+  }
+
+  const { error } = await supabase.from("user_provider_keys").upsert({
+    user_id: user.id,
+    provider,
+    ciphertext: encryptKey({ apiKey, workspaceId }),
+    hint: keyHint(apiKey),
+    updated_at: new Date().toISOString(),
+  });
+  if (error) return { error: error.message };
+  revalidatePath("/", "layout");
+  return { ok: true, value: `Saved your ${meta.label} key.` };
+}
+
+export async function removeProviderKey(provider: Provider) {
+  const { supabase, user } = await requireUser();
+  await supabase.from("user_provider_keys").delete().eq("user_id", user.id).eq("provider", provider);
+  revalidatePath("/", "layout");
+}
+
+// ---------------------------------------------------------------------------
+// Connected AI apps (MCP clients via Supabase OAuth)
+// ---------------------------------------------------------------------------
+
+export async function decideAuthorization(authorizationId: string, decision: "approve" | "deny") {
+  const { supabase } = await requireUser();
+  const { data, error } =
+    decision === "approve"
+      ? await supabase.auth.oauth.approveAuthorization(authorizationId, { skipBrowserRedirect: true })
+      : await supabase.auth.oauth.denyAuthorization(authorizationId, { skipBrowserRedirect: true });
+  if (error || !data) throw new Error(error?.message ?? "Couldn't complete the authorization.");
+  redirect(data.redirect_url);
+}
+
+export async function revokeConnectedApp(clientId: string) {
+  const { supabase } = await requireUser();
+  await supabase.auth.oauth.revokeGrant({ clientId });
+  revalidatePath("/settings");
+}
+
+// ---------------------------------------------------------------------------
 // Threads
 // ---------------------------------------------------------------------------
 
@@ -125,7 +211,9 @@ export async function createThread(form: FormData) {
   const { supabase, user } = await requireUser();
   const workspaceId = str(form, "workspace_id");
   const forkedFrom = str(form, "forked_from_version_id") || null;
-  const model = resolveModel(str(form, "model") || null);
+  const creds = await loadCredentials(supabase, user.id);
+  const model = resolveModel(creds, str(form, "model") || null);
+  if (!model) redirect(`/settings?next=${encodeURIComponent(`/w/${workspaceId}`)}`);
 
   let title = "New thread";
   if (forkedFrom) {
@@ -147,8 +235,8 @@ export async function createThread(form: FormData) {
 }
 
 export async function setThreadModel(threadId: string, model: string) {
-  const { supabase } = await requireUser();
-  if (!availableModels().some((m) => m.id === model)) return;
+  const { supabase, user } = await requireUser();
+  if (!availableModels(await loadCredentials(supabase, user.id)).some((m) => m.id === model)) return;
   await supabase.from("threads").update({ model }).eq("id", threadId);
 }
 
@@ -189,7 +277,10 @@ export async function draftSummary(input: {
   againstOfficial: boolean;
 }): Promise<ActionResult> {
   try {
-    const { supabase, thread } = await loadThread(input.threadId);
+    const { supabase, user, thread } = await loadThread(input.threadId);
+    const creds = await loadCredentials(supabase, user.id);
+    const model = resolveModel(creds, thread.model);
+    if (!model) return { error: "Add an AI key under AI keys to draft a summary." };
     const { data: messages } = await supabase
       .from("messages")
       .select("role, content")
@@ -203,7 +294,7 @@ export async function draftSummary(input: {
     }
 
     const summary = await complete({
-      model: resolveModel(thread.model),
+      model,
       system: SUMMARY_SYSTEM,
       messages: [
         {
@@ -218,7 +309,7 @@ export async function draftSummary(input: {
         },
       ],
       quick: true,
-    });
+    }, creds);
     return { ok: true, value: summary };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't draft a summary." };
@@ -392,10 +483,14 @@ export async function rebaseProposal(proposalId: string): Promise<ActionResult> 
     thread = data;
   }
 
+  const creds = await loadCredentials(supabase, user.id);
+  const model = resolveModel(creds, thread?.model);
+  if (!model) return { error: "Add an AI key under AI keys to rebase." };
+
   let reply: string;
   try {
     reply = await complete({
-      model: resolveModel(thread?.model),
+      model,
       system: REBASE_SYSTEM,
       messages: [
         {
@@ -409,7 +504,7 @@ export async function rebaseProposal(proposalId: string): Promise<ActionResult> 
           }),
         },
       ],
-    });
+    }, creds);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "The AI couldn't rebase this proposal." };
   }

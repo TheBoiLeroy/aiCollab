@@ -1,5 +1,5 @@
 import { threadSystemPrompt } from "@/lib/artifacts";
-import { streamChat, type ChatTurn } from "@/lib/models";
+import { loadCredentials, streamChat, type ChatTurn } from "@/lib/models";
 import { createClient } from "@/lib/supabase/server";
 import type { Artifact, ArtifactVersion, Message, Thread, Workspace } from "@/lib/types";
 import { displayName } from "@/lib/types";
@@ -22,6 +22,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/threads/[id
   const { data: thread } = await supabase.from("threads").select("*").eq("id", id).single<Thread>();
   if (!thread) return new Response("Not found", { status: 404 });
 
+  const creds = await loadCredentials(supabase, user.id);
   const [{ data: history }, { data: workspace }, { data: profile }] = await Promise.all([
     supabase.from("messages").select("role, content").eq("thread_id", id).order("created_at"),
     supabase.from("workspaces").select("*").eq("id", thread.workspace_id).single<Workspace>(),
@@ -71,7 +72,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/threads/[id
     async start(controller) {
       let reply = "";
       try {
-        for await (const piece of streamChat({ model: thread.model, system, messages })) {
+        for await (const piece of streamChat({ model: thread.model, system, messages }, creds)) {
           reply += piece;
           controller.enqueue(encoder.encode(piece));
         }

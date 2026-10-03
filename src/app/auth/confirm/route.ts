@@ -8,14 +8,16 @@ export async function GET(request: NextRequest) {
   const tokenHash = searchParams.get("token_hash");
   const type = searchParams.get("type") as EmailOtpType | null;
   const code = searchParams.get("code");
+  const next = searchParams.get("next") ?? "";
+  const done = next.startsWith("/") && !next.startsWith("//") ? next : "/workspaces";
   const supabase = await createClient();
 
   if (tokenHash && type) {
     const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
-    if (!error) return NextResponse.redirect(new URL("/workspaces", request.url));
+    if (!error) return NextResponse.redirect(new URL(done, request.url));
   } else if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) return NextResponse.redirect(new URL("/workspaces", request.url));
+    if (!error) return NextResponse.redirect(new URL(done, request.url));
   }
   return NextResponse.redirect(new URL("/login?error=confirm", request.url));
 }

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { FormatBadge, StatusBadge, timeAgo } from "@/components/status";
+import { FormatBadge, ReviewTag, StatusBadge, timeAgo } from "@/components/status";
 import { displayName, type Artifact, type Proposal, type Review } from "@/lib/types";
 import { loadWorkspace } from "@/lib/workspace";
 
@@ -33,6 +33,7 @@ export default async function FeedPage({ params }: PageProps<"/w/[wsId]">) {
 
   const open = (proposals ?? []).filter((p) => p.status === "open");
   const needsMyVote = open.filter((p) => p.author_id !== user.id && !votesOn(p).some((r) => r.reviewer_id === user.id));
+  const awaitingMe = new Set(needsMyVote.map((p) => p.artifact_id));
   const myToFix = (proposals ?? []).filter(
     (p) => p.author_id === user.id && (p.status === "rejected" || p.status === "needs_rebase"),
   );
@@ -103,7 +104,10 @@ export default async function FeedPage({ params }: PageProps<"/w/[wsId]">) {
                 <Link href={`/w/${wsId}/a/${a.id}`} className="card block hover:border-accent">
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-medium">{a.title}</span>
-                    <FormatBadge format={a.format} />
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {awaitingMe.has(a.id) && <ReviewTag />}
+                      <FormatBadge format={a.format} />
+                    </span>
                   </div>
                   <div className="mt-1 text-xs text-muted">Updated {timeAgo(a.updated_at)}</div>
                 </Link>

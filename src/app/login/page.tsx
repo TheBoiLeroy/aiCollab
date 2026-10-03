@@ -10,6 +10,9 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
           Work privately with your own AI. Share the artifact, not the chat. Change it together through team review.
         </p>
       </div>
+      {typeof next === "string" && next.startsWith("/join/") && (
+        <p className="card text-sm">You&apos;ve been invited to a workspace. Sign in or create an account to join.</p>
+      )}
       {error === "confirm" && (
         <p className="text-sm text-red-600">That confirmation link didn&apos;t work. Try signing in, or sign up again.</p>
       )}

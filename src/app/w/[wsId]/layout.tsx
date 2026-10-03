@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { createThread } from "@/app/actions";
 import { SubmitButton } from "@/components/forms";
-import { availableModels } from "@/lib/models";
+import { availableModels, loadCredentials } from "@/lib/models";
+import { artifactsAwaitingReview } from "@/lib/reviews";
 import { loadWorkspace } from "@/lib/workspace";
 import type { Artifact, Thread } from "@/lib/types";
 
 export default async function WorkspaceLayout({ children, params }: LayoutProps<"/w/[wsId]">) {
   const { wsId } = await params;
   const { supabase, user, workspace } = await loadWorkspace(wsId);
-  const [{ data: threads }, { data: artifacts }] = await Promise.all([
+  const [{ data: threads }, { data: artifacts }, awaitingMe] = await Promise.all([
     supabase
       .from("threads")
       .select("id, title, updated_at")
@@ -23,8 +24,9 @@ export default async function WorkspaceLayout({ children, params }: LayoutProps<
       .eq("workspace_id", wsId)
       .order("updated_at", { ascending: false })
       .returns<Pick<Artifact, "id" | "title">[]>(),
+    artifactsAwaitingReview(supabase, wsId, user.id),
   ]);
-  const hasModels = availableModels().length > 0;
+  const hasModels = availableModels(await loadCredentials(supabase, user.id)).length > 0;
 
   return (
     <div className="flex min-h-screen flex-1 flex-col md:flex-row">
@@ -39,6 +41,7 @@ export default async function WorkspaceLayout({ children, params }: LayoutProps<
           <nav className="mt-2 flex gap-3 text-sm text-muted">
             <Link href={`/w/${wsId}`} className="hover:text-foreground">Feed</Link>
             <Link href={`/w/${wsId}/members`} className="hover:text-foreground">Members</Link>
+            <Link href={`/settings?next=${encodeURIComponent(`/w/${wsId}`)}`} className="hover:text-foreground">AI keys</Link>
           </nav>
         </div>
 
@@ -47,7 +50,12 @@ export default async function WorkspaceLayout({ children, params }: LayoutProps<
           <SubmitButton className="btn-primary w-full" pendingText="Starting…">
             New private thread
           </SubmitButton>
-          {!hasModels && <p className="mt-2 text-xs text-red-600">No AI provider keys are configured on the server.</p>}
+          {!hasModels && (
+            <p className="mt-2 text-xs text-red-600">
+              Add your own AI key to start a thread.{" "}
+              <Link href={`/settings?next=${encodeURIComponent(`/w/${wsId}`)}`} className="underline">AI keys</Link>
+            </p>
+          )}
         </form>
 
         <section>
@@ -69,8 +77,16 @@ export default async function WorkspaceLayout({ children, params }: LayoutProps<
           <ul className="flex flex-col text-sm">
             {artifacts?.map((a) => (
               <li key={a.id}>
-                <Link href={`/w/${wsId}/a/${a.id}`} className="block truncate rounded px-2 py-1 hover:bg-code">
-                  {a.title}
+                <Link href={`/w/${wsId}/a/${a.id}`} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-code">
+                  <span className="truncate">{a.title}</span>
+                  {awaitingMe.has(a.id) && (
+                    <span
+                      className="ml-auto shrink-0 rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                      title="A proposal on this artifact is waiting on your vote"
+                    >
+                      Review
+                    </span>
+                  )}
                 </Link>
               </li>
             ))}

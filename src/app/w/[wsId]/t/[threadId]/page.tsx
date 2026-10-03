@@ -1,12 +1,12 @@
 import { notFound } from "next/navigation";
-import { availableModels } from "@/lib/models";
+import { availableModels, loadCredentials } from "@/lib/models";
 import type { Artifact, ArtifactVersion, Message, Proposal, Thread } from "@/lib/types";
 import { loadWorkspace } from "@/lib/workspace";
 import { ChatView, type ForkInfo } from "./chat-view";
 
 export default async function ThreadPage({ params }: PageProps<"/w/[wsId]/t/[threadId]">) {
   const { wsId, threadId } = await params;
-  const { supabase, workspace } = await loadWorkspace(wsId);
+  const { supabase, user, workspace } = await loadWorkspace(wsId);
 
   const { data: thread } = await supabase.from("threads").select("*").eq("id", threadId).maybeSingle<Thread>();
   if (!thread || thread.workspace_id !== wsId) notFound();
@@ -53,9 +53,9 @@ export default async function ThreadPage({ params }: PageProps<"/w/[wsId]/t/[thr
     }
   }
 
-  const models = availableModels();
+  const models = availableModels(await loadCredentials(supabase, user.id));
   if (!models.some((m) => m.id === thread.model)) {
-    models.push({ id: thread.model, label: `${thread.model} (not configured)`, provider: "anthropic" });
+    models.push({ id: thread.model, label: `${thread.model} (no key)`, provider: "anthropic" });
   }
 
   return (
